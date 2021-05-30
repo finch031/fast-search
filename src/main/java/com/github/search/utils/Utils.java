@@ -5,6 +5,8 @@ import java.nio.charset.Charset;
 import java.nio.file.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
 public final class Utils {
@@ -132,7 +134,6 @@ public final class Utils {
     public static boolean readAndLineMatch(File file, Charset charset,List<String> fileContentWordsList) throws IOException{
         BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), charset));
         boolean matchLineSuccess = false;
-
         try {
             int lineNum = 0;
             for (;;) {
@@ -158,4 +159,68 @@ public final class Utils {
         return matchLineSuccess;
     }
 
+    public static ThreadPoolExecutor newCachedThreadPool(int corePoolSize,int maxPoolSize,long keepAliveTime,int blockingQueueSize){
+        // 线程任务拒绝策略: 线程任务超过线程池大小和阻塞队列时,新来的任务由main线程执行
+        RejectedExecutionHandler rejectionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
+        String threadGroupName = "fast-search";
+        NamedThreadFactory threadFactory = new NamedThreadFactory(threadGroupName,false);
+        BlockingQueue<Runnable> blockingQueue = new ArrayBlockingQueue<>(blockingQueueSize);
+
+        // 线程池创建
+        ThreadPoolExecutor threadPool = new ThreadPoolExecutor(
+                corePoolSize,
+                maxPoolSize,
+                keepAliveTime,
+                TimeUnit.SECONDS,
+                blockingQueue,
+                threadFactory,
+                rejectionHandler);
+        threadPool.allowCoreThreadTimeOut(true);
+
+        return threadPool;
+    }
+
+    public static Runnable fileContentWordsSearchTask(ConcurrentLinkedQueue<File> filesQueue,
+                                                     List<String> fileContentWordsList){
+        return new Runnable() {
+            @Override
+            public void run() {
+                while(true){
+                    File file = filesQueue.poll();
+                    if(file != null){
+                        try {
+                            boolean matchLineSuccess = Utils.readAndLineMatch(
+                                    file,
+                                    Charset.defaultCharset(),
+                                    fileContentWordsList);
+                            System.out.println("thread:" + Thread.currentThread().getId() + ",file:" + file.getName() + ",match:" + matchLineSuccess);
+                        } catch (IOException e) {
+                            // ignore
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    private static class NamedThreadFactory implements ThreadFactory{
+        private final ThreadGroup threadGroup;
+        private final String name;
+        private final boolean makeDaemons;
+        private final AtomicInteger threadNumber = new AtomicInteger(1);
+        public NamedThreadFactory(String name,boolean makeDaemons){
+            this.threadGroup = new ThreadGroup(Thread.currentThread().getThreadGroup(),name);
+            this.name = name;
+            this.makeDaemons = makeDaemons;
+        }
+
+        public Thread newThread(Runnable runnable){
+            Thread thread = new Thread(threadGroup,runnable,name + "-" + threadNumber.getAndIncrement());
+            thread.setDaemon(makeDaemons);
+            if(thread.getPriority() != Thread.NORM_PRIORITY){
+                thread.setPriority(Thread.NORM_PRIORITY);
+            }
+            return thread;
+        }
+    }
 }

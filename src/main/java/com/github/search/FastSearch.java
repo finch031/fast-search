@@ -8,6 +8,9 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import com.github.search.utils.Tuple;
 import com.github.search.utils.Utils;
@@ -226,6 +229,8 @@ public class FastSearch {
             System.exit(1);
         }
 
+        ConcurrentLinkedQueue<File> filesQueue = new ConcurrentLinkedQueue<>();
+
         Predicate<Path> fileFilter = new Predicate<Path>() {
             @Override
             public boolean test(Path path) {
@@ -324,6 +329,7 @@ public class FastSearch {
                 }
 
                 if(!fileContentWordsList.isEmpty()){
+                    /*
                     boolean fileContentFlag = false;
                     try {
                         fileContentFlag = Utils.readAndLineMatch(file, Charset.defaultCharset(),fileContentWordsList);
@@ -331,11 +337,21 @@ public class FastSearch {
                         // ignore
                     }
                     filterFlag = fileContentFlag;
+                    */
+                    filesQueue.offer(file);
                 }
 
                 return filterFlag;
             }
         };
+
+        ThreadPoolExecutor poolExecutor = Utils.newCachedThreadPool(4,8,30,100);
+
+        Runnable task = Utils.fileContentWordsSearchTask(filesQueue,fileContentWordsList);
+        poolExecutor.submit(task);
+        poolExecutor.submit(task);
+        poolExecutor.submit(task);
+        poolExecutor.submit(task);
 
         int i = 0;
         for (String dir : dirList) {
@@ -344,6 +360,21 @@ public class FastSearch {
             for (String scanFile : scanFiles) {
                 System.out.println(++i + " => " + scanFile);
             }
+        }
+
+        try{
+            /*
+             * Blocks until all tasks have completed execution after a shutdown
+             * request, or the timeout occurs, or the current thread is
+             * interrupted, whichever happens first.
+             * true:if this executor terminated
+             * false:if the timeout elapsed before termination
+             * */
+            if(!poolExecutor.awaitTermination(10L, TimeUnit.MINUTES)) {
+                poolExecutor.shutdownNow();
+            }
+        }catch (InterruptedException ie){
+            ie.printStackTrace();
         }
     }
 
