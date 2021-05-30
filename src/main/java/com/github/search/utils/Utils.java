@@ -24,6 +24,14 @@ public final class Utils {
         return sw.toString();
     }
 
+    public static void sleepQuietly(long millis){
+        try{
+            Thread.sleep(millis);
+        }catch (InterruptedException ie){
+            // ignore.
+        }
+    }
+
     /**
      * Returns the current working directory as specified by the {@code user.dir} system property.
      * @return current working directory
@@ -144,7 +152,7 @@ public final class Utils {
                     lineNum++;
                     for (String s : fileContentWordsList) {
                         if(line.contains(s)){
-                            String matchMessage = String.format("match:%s,%s,%s",file,lineNum,line);
+                            String matchMessage = String.format("match:%s,%s,[ %s ]",file,lineNum,line);
                             System.out.println(matchMessage);
                             matchLineSuccess = true;
                         }
@@ -193,10 +201,14 @@ public final class Utils {
                                     file,
                                     Charset.defaultCharset(),
                                     fileContentWordsList);
-                            System.out.println("thread:" + Thread.currentThread().getId() + ",file:" + file.getName() + ",match:" + matchLineSuccess);
+                            if(matchLineSuccess){
+                                System.out.println("match,thread:" + Thread.currentThread().getId() + ",file:" + file.getName());
+                            }
                         } catch (IOException e) {
                             // ignore
                         }
+                    }else{
+                        sleepQuietly(100);
                     }
                 }
             }
