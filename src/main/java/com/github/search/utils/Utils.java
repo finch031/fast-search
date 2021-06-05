@@ -172,7 +172,8 @@ public final class Utils {
         RejectedExecutionHandler rejectionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
         String threadGroupName = "fast-search";
         NamedThreadFactory threadFactory = new NamedThreadFactory(threadGroupName,false);
-        BlockingQueue<Runnable> blockingQueue = new ArrayBlockingQueue<>(blockingQueueSize);
+        // BlockingQueue<Runnable> blockingQueue = new ArrayBlockingQueue<>(blockingQueueSize);
+        BlockingQueue<Runnable> blockingQueue = new LinkedBlockingQueue<>(blockingQueueSize);
 
         // 线程池创建
         ThreadPoolExecutor threadPool = new ThreadPoolExecutor(

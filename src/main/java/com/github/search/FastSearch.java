@@ -229,7 +229,9 @@ public class FastSearch {
             System.exit(1);
         }
 
-        ConcurrentLinkedQueue<File> filesQueue = new ConcurrentLinkedQueue<>();
+        long startMillis = System.currentTimeMillis();
+        // ConcurrentLinkedQueue<File> filesQueue = new ConcurrentLinkedQueue<>();
+        ThreadPoolExecutor poolExecutor = Utils.newCachedThreadPool(4,8,30,10000);
 
         Predicate<Path> fileFilter = new Predicate<Path>() {
             @Override
@@ -338,20 +340,34 @@ public class FastSearch {
                     }
                     filterFlag = fileContentFlag;
                     */
-                    filesQueue.offer(file);
+
+                    // filesQueue.offer(file);
+
+                    Runnable task = new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                boolean matchLineSuccess = Utils.readAndLineMatch(
+                                        file,
+                                        Charset.defaultCharset(),
+                                        fileContentWordsList);
+                                if(matchLineSuccess){
+                                    System.out.println("match,thread:" + Thread.currentThread().getId() + ",file:" + file.getName());
+                                }
+                            } catch (IOException e) {
+                                // ignore
+                            }
+                        }
+                    };
+                    poolExecutor.submit(task);
                 }
 
                 return filterFlag;
             }
         };
 
-        ThreadPoolExecutor poolExecutor = Utils.newCachedThreadPool(4,8,30,100);
-
-        Runnable task = Utils.fileContentWordsSearchTask(filesQueue,fileContentWordsList);
-        poolExecutor.submit(task);
-        poolExecutor.submit(task);
-        poolExecutor.submit(task);
-        poolExecutor.submit(task);
+        // Runnable task = Utils.fileContentWordsSearchTask(filesQueue,fileContentWordsList);
+        // poolExecutor.submit(task);
 
         int i = 0;
         for (String dir : dirList) {
@@ -362,6 +378,9 @@ public class FastSearch {
             }
         }
 
+        long runSeconds = (System.currentTimeMillis() - startMillis) / 1000;
+        System.out.println("run time:" + runSeconds + " seconds!");
+
         try{
             /*
              * Blocks until all tasks have completed execution after a shutdown
@@ -370,7 +389,7 @@ public class FastSearch {
              * true:if this executor terminated
              * false:if the timeout elapsed before termination
              * */
-            if(!poolExecutor.awaitTermination(10L, TimeUnit.MINUTES)) {
+            if(!poolExecutor.awaitTermination(1L, TimeUnit.SECONDS)) {
                 poolExecutor.shutdownNow();
             }
         }catch (InterruptedException ie){
