@@ -1,19 +1,17 @@
 package com.github.search;
 
 import java.io.File;
-import java.io.IOException;
-import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Predicate;
 import com.github.search.utils.Tuple;
 import com.github.search.utils.Utils;
+
+import static com.github.search.utils.Utils.AVAILABLE_PROCESSORS;
 import static com.github.search.utils.Utils.paramIndexSearch;
 
 public class FastSearch {
@@ -229,76 +227,81 @@ public class FastSearch {
             System.exit(1);
         }
 
+        long startTs = System.currentTimeMillis();
+
+        // 文件内容搜索队列.
         ConcurrentLinkedQueue<File> filesQueue = new ConcurrentLinkedQueue<>();
 
+        // 设定过滤规则
         Predicate<Path> fileFilter = new Predicate<Path>() {
             @Override
             public boolean test(Path path) {
                 File file = path.toFile();
-
-                boolean filterFlag = false;
-
+                // 文件名前缀过滤规则.
                 if(!prefixList.isEmpty()){
                     boolean prefixFlag = false;
                     for (String s : prefixList) {
                         if(file.getName().startsWith(s)){
                             prefixFlag = true;
+                            break;
                         }
                     }
-                    filterFlag = prefixFlag;
+                    if(!prefixFlag){
+                        return false;
+                    }
                 }
 
-                if(filterFlag){
-                    return filterFlag;
-                }
-
+                // 文件名后缀过滤规则.
                 if(!suffixList.isEmpty()){
                     boolean suffixFlag = false;
                     for (String s : suffixList) {
                         if(file.getName().endsWith(s)){
                             suffixFlag = true;
+                            break;
                         }
                     }
-                    filterFlag = suffixFlag;
+                    if(!suffixFlag){
+                        return false;
+                    }
                 }
 
-                if(filterFlag){
-                    return filterFlag;
-                }
-
+                // 文件名过滤规则.
                 if(!fileNames.isEmpty()){
                     boolean fileNameFlag = false;
+                    String currFileName = file.getName();
                     for (String fileName : fileNames) {
                         // contains or equals?
-                        if(file.getName().contains(fileName)){
+                        if(currFileName.contains(fileName)){
                             fileNameFlag = true;
+                            break;
                         }
                     }
-                    filterFlag = fileNameFlag;
+                    if(!fileNameFlag){
+                        return false;
+                    }
                 }
 
-                if(filterFlag){
-                    return filterFlag;
-                }
-
+                // 文件修改时间过滤规则
                 if(modifiedTimeRange != null){
                     long lastModified = file.lastModified();
-                    filterFlag = lastModified >= modifiedTimeRange.v1() && lastModified <= modifiedTimeRange.v2();
+                    if(lastModified >= modifiedTimeRange.v1() && lastModified <= modifiedTimeRange.v2()){
+                        // pass.
+                    }else{
+                        return false;
+                    }
                 }
 
-                if(filterFlag){
-                    return filterFlag;
-                }
-
+                // 文件大小过滤规则
                 if(fileSizeRange != null){
                     long fileSize = file.length();
-                    filterFlag = fileSize >= fileSizeRange.v1() && fileSize <= fileSizeRange.v2();
+                    if(fileSize >= fileSizeRange.v1() && fileSize <= fileSizeRange.v2()){
+                        // pass.
+                    }else{
+                        return false;
+                    }
                 }
 
-                if(filterFlag){
-                    return filterFlag;
-                }
-
+                // 文件权限过滤规则
                 if(!fileAccessList.isEmpty()){
                     boolean fileAccessFlag = true;
                     for (String s : fileAccessList) {
@@ -321,37 +324,42 @@ public class FastSearch {
                         }
                     }
 
-                    filterFlag = fileAccessFlag;
-                }
-
-                if(filterFlag){
-                    return filterFlag;
-                }
-
-                if(!fileContentWordsList.isEmpty()){
-                    /*
-                    boolean fileContentFlag = false;
-                    try {
-                        fileContentFlag = Utils.readAndLineMatch(file, Charset.defaultCharset(),fileContentWordsList);
-                    } catch (IOException e) {
-                        // ignore
+                    if(!fileAccessFlag){
+                        return false;
                     }
-                    filterFlag = fileContentFlag;
-                    */
-                    filesQueue.offer(file);
                 }
 
-                return filterFlag;
+                // 文件内容过滤规则.
+                if(!fileContentWordsList.isEmpty()){
+                    // boolean fileContentFlag = Utils.readAndLineMatch(file, Charset.defaultCharset(),fileContentWordsList);
+                    // if(!fileContentFlag){
+                    //     return false;
+                    // }
+
+                    // 放入队列中进行异步文件内容过滤.
+                    filesQueue.offer(file);
+                    return false;
+                }
+
+                return true;
             }
         };
 
-        ThreadPoolExecutor poolExecutor = Utils.newCachedThreadPool(4,8,30,100);
-
+        ThreadPoolExecutor poolExecutor = null;
+        // 文件内容搜索线程任务.
         Runnable task = Utils.fileContentWordsSearchTask(filesQueue,fileContentWordsList);
-        poolExecutor.submit(task);
-        poolExecutor.submit(task);
-        poolExecutor.submit(task);
-        poolExecutor.submit(task);
+
+        if(!fileContentWordsList.isEmpty()){
+            // 最少4个线程任务.
+            int realThreadNum = Math.max(AVAILABLE_PROCESSORS, 4);
+            // 文件内容搜索线程池.
+            poolExecutor = Utils.newCachedThreadPool(realThreadNum,2 * realThreadNum,30,100);
+
+            // 启动文件内容搜索线程任务.
+            for(int i = 0; i < realThreadNum; i++){
+                poolExecutor.submit(task);
+            }
+        }
 
         int i = 0;
         for (String dir : dirList) {
@@ -362,20 +370,43 @@ public class FastSearch {
             }
         }
 
-        try{
-            /*
-             * Blocks until all tasks have completed execution after a shutdown
-             * request, or the timeout occurs, or the current thread is
-             * interrupted, whichever happens first.
-             * true:if this executor terminated
-             * false:if the timeout elapsed before termination
-             * */
-            if(!poolExecutor.awaitTermination(10L, TimeUnit.MINUTES)) {
-                poolExecutor.shutdownNow();
-            }
-        }catch (InterruptedException ie){
-            ie.printStackTrace();
-        }
-    }
+        // 等待文件内容搜索线程池结束.
+        if(poolExecutor != null){
+            while (true){
+                // 文件队列为空,文件内容搜索任务已全部消费完.
+                if(filesQueue.isEmpty()){
+                    // 有序关闭线程池中任务已结束的线程
+                    poolExecutor.shutdown();
+                    try{
+                        /*
+                         * Blocks until all tasks have completed execution after a shutdown
+                         * request, or the timeout occurs, or the current thread is
+                         * interrupted, whichever happens first.
+                         * true:if this executor terminated
+                         * false:if the timeout elapsed before termination
+                         * */
+                        if(!poolExecutor.awaitTermination(1L, TimeUnit.SECONDS)) {
+                            // There are no guarantees beyond best-effort attempts to stop
+                            // processing actively executing tasks.
+                            // This implementation cancels tasks via Thread.interrupt,
+                            // so any task that fails to respond to interrupts may never terminate.
+                            poolExecutor.shutdownNow();
+                        }
 
+                        if(!poolExecutor.awaitTermination(1L, TimeUnit.SECONDS)){
+                            System.err.println("Unable to shutdown properly.");
+                        }
+                    }catch (InterruptedException ie){
+                        ie.printStackTrace();
+                    }
+
+                    break;
+                }else{
+                    Utils.sleepQuietly(100);
+                }
+            } // end of while
+        }
+
+        System.out.println("fast search time: " + Utils.appendPosixTime(System.currentTimeMillis() - startTs));
+    }
 }
